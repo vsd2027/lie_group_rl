@@ -22,4 +22,6 @@ dependencies:
   - pip:
     - gymnasium>=0.29
     - mujoco>=3.0
+    - stable-baselines3>=2.1
     - tensorboard>=2.14
+    - pyyaml>=6.0
