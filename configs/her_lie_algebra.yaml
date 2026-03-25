@@ -3,8 +3,8 @@ state_repr: lie_algebra
 action_repr: lie_algebra
 max_angle: 0.3141592653589793
 threshold: 0.1
-max_episode_steps: 100
-total_timesteps: 200000
+max_episode_steps: 50
+total_timesteps: 30000
 learning_rate: 0.001
 batch_size: 256
 buffer_size: 1000000

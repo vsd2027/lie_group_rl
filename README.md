@@ -62,6 +62,15 @@ python ppo_lie_group.py --resume runs/.../checkpoint_500.pt --total-timesteps 10
 
 # Force CPU on Mac if MPS gives issues
 python ppo_lie_group.py --device cpu
+
+# Watch random actions on the Franka arm (no model needed)
+python visualize.py --env franka --random
+
+# Watch a trained model
+python visualize.py --env franka --model runs/ddpg_her_franka*/best_model.zip
+
+# Pure orientation just prints distances to terminal
+python visualize.py --env orientation --model runs/ddpg_her_orientation*/best_model.zip
 ```
 
 ## Project structure
