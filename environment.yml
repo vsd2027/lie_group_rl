@@ -1,0 +1,25 @@
+name: lie_group_rl
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10
+  - numpy>=1.24
+  - scipy>=1.10
+  - matplotlib>=3.7
+  - pandas>=2.0
+  - pip
+
+  # PyTorch without CUDA pin — conda resolves per platform:
+  #   macOS arm64 → MPS backend (Apple Silicon)
+  #   macOS x86   → CPU
+  #   Linux       → CPU (use setup.sh for CUDA variant)
+  - pytorch>=2.1
+  - torchvision
+
+  - pip:
+    - gymnasium>=0.29
+    - mujoco>=3.0
+    - tensorboard>=2.14
