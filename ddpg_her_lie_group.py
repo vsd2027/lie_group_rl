@@ -121,10 +121,9 @@ class OrientationGoalEnv(gym.Env):
     def compute_reward(self, achieved_goal, desired_goal, info):
         """Vectorized reward computation (required by HER).
 
-        Computes geodesic distance between achieved and desired orientations.
         Must handle batched inputs: (batch_size, goal_dim) arrays.
+        Fully vectorized — no Python for-loops.
         """
-        # Convert back to rotation matrices to compute geodesic distance
         if achieved_goal.ndim == 1:
             achieved_goal = achieved_goal[np.newaxis]
             desired_goal = desired_goal[np.newaxis]
@@ -132,19 +131,42 @@ class OrientationGoalEnv(gym.Env):
         else:
             squeeze = False
 
-        batch_size = achieved_goal.shape[0]
-        rewards = np.zeros(batch_size, dtype=np.float32)
+        if self.action_repr == 'lie_algebra':
+            # Fast path: goals are axis-angle vectors.
+            # Convert to rotation matrices in batch, compute batch geodesic distance.
+            R_a = exp_so3_np(achieved_goal.astype(np.float32))  # (B, 3, 3)
+            R_d = exp_so3_np(desired_goal.astype(np.float32))   # (B, 3, 3)
+            # R_diff = R_a^T @ R_d  (batch matmul)
+            R_diff = np.einsum('bij,bjk->bik', R_a.transpose(0, 2, 1), R_d)
+            # Geodesic distance = arccos((tr(R_diff) - 1) / 2)
+            trace = R_diff[:, 0, 0] + R_diff[:, 1, 1] + R_diff[:, 2, 2]
+            cos_angle = np.clip((trace - 1.0) / 2.0, -1.0, 1.0)
+            dist = np.arccos(cos_angle)
+        elif self.action_repr == 'euler':
+            # Convert euler to rotation matrices in batch via scipy
+            from scipy.spatial.transform import Rotation
+            R_a = Rotation.from_euler('xyz', achieved_goal).as_matrix()
+            R_d = Rotation.from_euler('xyz', desired_goal).as_matrix()
+            R_diff = np.einsum('bij,bjk->bik', R_a.transpose(0, 2, 1), R_d)
+            trace = R_diff[:, 0, 0] + R_diff[:, 1, 1] + R_diff[:, 2, 2]
+            cos_angle = np.clip((trace - 1.0) / 2.0, -1.0, 1.0)
+            dist = np.arccos(cos_angle)
+        elif self.action_repr in ('quat', 'quat_pos'):
+            # Quaternion distance: d = 2 * arccos(|q1 · q2|)
+            q_a = achieved_goal / (np.linalg.norm(achieved_goal, axis=-1, keepdims=True) + 1e-8)
+            q_d = desired_goal / (np.linalg.norm(desired_goal, axis=-1, keepdims=True) + 1e-8)
+            dot = np.abs(np.sum(q_a * q_d, axis=-1))
+            dot = np.clip(dot, 0.0, 1.0)
+            dist = 2.0 * np.arccos(dot)
+        else:
+            # Fallback: per-element (slow, but correct for any repr)
+            dist = np.zeros(len(achieved_goal), dtype=np.float32)
+            for i in range(len(achieved_goal)):
+                R_a = OrientationRepresentation.action_to_rotation(achieved_goal[i], self.action_repr)
+                R_d = OrientationRepresentation.action_to_rotation(desired_goal[i], self.action_repr)
+                dist[i] = geodesic_distance_np(R_a, R_d)
 
-        for i in range(batch_size):
-            R_achieved = OrientationRepresentation.action_to_rotation(
-                achieved_goal[i], self.action_repr
-            )
-            R_desired = OrientationRepresentation.action_to_rotation(
-                desired_goal[i], self.action_repr
-            )
-            dist = geodesic_distance_np(R_achieved, R_desired)
-            rewards[i] = 0.0 if dist <= self.threshold else -1.0
-
+        rewards = np.where(dist <= self.threshold, 0.0, -1.0).astype(np.float32)
         if squeeze:
             rewards = rewards[0]
         return rewards
@@ -246,12 +268,12 @@ def parse_args():
 def main():
     args = parse_args()
 
-    from stable_baselines3 import TD3, HerReplayBuffer
+    from stable_baselines3 import DDPG, HerReplayBuffer
     from stable_baselines3.common.noise import NormalActionNoise
     from stable_baselines3.common.callbacks import EvalCallback
     from stable_baselines3.common.monitor import Monitor
 
-    exp_name = f"td3_her_{args.env}_s-{args.state_repr}_a-{args.action_repr}__{args.seed}__{int(time.time())}"
+    exp_name = f"ddpg_her_{args.env}_s-{args.state_repr}_a-{args.action_repr}__{args.seed}__{int(time.time())}"
     log_path = os.path.join(args.log_dir, exp_name)
     os.makedirs(log_path, exist_ok=True)
 
@@ -267,7 +289,7 @@ def main():
         args.threshold = 0.15
 
     print(f"{'='*60}")
-    print(f"  TD3 + HER — Lie Group Orientations")
+    print(f"  DDPG + HER — Lie Group Orientations")
     print(f"  Environment: {args.env}")
     print(f"  State repr:  {args.state_repr}")
     print(f"  Action repr: {args.action_repr}")
@@ -312,8 +334,8 @@ def main():
     # Network architecture
     net_arch = [args.hidden_dim] * args.num_layers
 
-    # Model: TD3 + HER
-    model = TD3(
+    # Model: DDPG + HER
+    model = DDPG(
         "MultiInputPolicy",
         env,
         replay_buffer_class=HerReplayBuffer,

@@ -377,12 +377,34 @@ class FrankaOrientationGoalEnv(gym.Env):
         else:
             squeeze = False
 
-        rewards = np.zeros(len(achieved_goal), dtype=np.float32)
-        for i in range(len(achieved_goal)):
-            R_a = OrientationRepresentation.action_to_rotation(achieved_goal[i], self.action_repr)
-            R_d = OrientationRepresentation.action_to_rotation(desired_goal[i], self.action_repr)
-            dist = geodesic_distance_np(R_a, R_d)
-            rewards[i] = 0.0 if dist <= self.threshold else -1.0
+        if self.action_repr == 'lie_algebra':
+            R_a = exp_so3_np(achieved_goal.astype(np.float32))
+            R_d = exp_so3_np(desired_goal.astype(np.float32))
+            R_diff = np.einsum('bij,bjk->bik', R_a.transpose(0, 2, 1), R_d)
+            trace = R_diff[:, 0, 0] + R_diff[:, 1, 1] + R_diff[:, 2, 2]
+            cos_angle = np.clip((trace - 1.0) / 2.0, -1.0, 1.0)
+            dist = np.arccos(cos_angle)
+        elif self.action_repr == 'euler':
+            from scipy.spatial.transform import Rotation
+            R_a = Rotation.from_euler('xyz', achieved_goal).as_matrix()
+            R_d = Rotation.from_euler('xyz', desired_goal).as_matrix()
+            R_diff = np.einsum('bij,bjk->bik', R_a.transpose(0, 2, 1), R_d)
+            trace = R_diff[:, 0, 0] + R_diff[:, 1, 1] + R_diff[:, 2, 2]
+            cos_angle = np.clip((trace - 1.0) / 2.0, -1.0, 1.0)
+            dist = np.arccos(cos_angle)
+        elif self.action_repr in ('quat', 'quat_pos'):
+            q_a = achieved_goal / (np.linalg.norm(achieved_goal, axis=-1, keepdims=True) + 1e-8)
+            q_d = desired_goal / (np.linalg.norm(desired_goal, axis=-1, keepdims=True) + 1e-8)
+            dot = np.clip(np.abs(np.sum(q_a * q_d, axis=-1)), 0.0, 1.0)
+            dist = 2.0 * np.arccos(dot)
+        else:
+            dist = np.zeros(len(achieved_goal), dtype=np.float32)
+            for i in range(len(achieved_goal)):
+                R_a = OrientationRepresentation.action_to_rotation(achieved_goal[i], self.action_repr)
+                R_d = OrientationRepresentation.action_to_rotation(desired_goal[i], self.action_repr)
+                dist[i] = geodesic_distance_np(R_a, R_d)
+
+        rewards = np.where(dist <= self.threshold, 0.0, -1.0).astype(np.float32)
 
         return rewards[0] if squeeze else rewards
 
